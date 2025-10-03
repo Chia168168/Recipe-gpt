@@ -13,7 +13,8 @@ if not DATABASE_URL:
     # allow sqlite fallback for easy local testing
     DATABASE_URL = "sqlite:///teng_recipes.db"
 
-engine = create_engine(DATABASE_URL, echo=False, future=True)
+engine = create_engine(DATABASE_URL.replace("postgres://", "postgresql+psycopg://"), echo=False, future=True)
+
 SessionLocal = scoped_session(sessionmaker(bind=engine))
 Base = declarative_base()
 
