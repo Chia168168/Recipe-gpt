@@ -1,0 +1,395 @@
+// Google Apps Script 服務端代碼
+// 將以下代碼複製到Google Apps Script的code.gs文件中
+// Server side for TENG 食譜系統 - v3.1 (with custom ingredients and baking info)
+// 修正欄位對齊問題
+// 新增：智能食材換算工具
+
+function doGet() {
+  initSheet();
+  initIngredientsDB(); // 初始化食材資料庫
+  return HtmlService.createHtmlOutputFromFile("index")
+    .setTitle("TENG食譜管理系統 v3.1")
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function initSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName("食譜");
+  if (!sheet) {
+    sheet = ss.insertSheet("食譜", 0);
+  }
+  
+  // 增加烘烤相關欄位
+  const headers = ["食譜名稱", "分組", "食材", "重量 (g)", "百分比", "說明", "步驟", "建立時間", "上火溫度", "下火溫度", "烘烤時間", "旋風", "蒸汽"];
+  
+  // 檢查表頭是否正確
+  if (sheet.getLastRow() < 1) {
+     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+     return;
+  }
+  
+  const firstRow = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+  const isHeaderCorrect = headers.every((h, i) => firstRow[i] === h);
+  
+  if (!isHeaderCorrect) {
+    // 如果表頭不正確，可以選擇插入新工作表或提醒使用者
+    // 這裡我們簡單地設置表頭
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
+}
+
+// 初始化食材資料庫工作表
+function initIngredientsDB() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName("食材資料庫");
+  if (!sheet) {
+    sheet = ss.insertSheet("食材資料庫");
+    const headers = ["食材名稱", "含水率"];
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
+}
+
+// --- 食材資料庫管理 ---
+function getIngredientsDB() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("食材資料庫");
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+  
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+  return data.map(row => ({
+    name: row[0],
+    hydration: row[1]
+  }));
+}
+
+function saveIngredientDB(ingredient) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("食材資料庫");
+  const data = sheet.getDataRange().getValues();
+  
+  // 檢查是否已存在
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === ingredient.name) {
+      sheet.getRange(i + 1, 2).setValue(ingredient.hydration);
+      return { status: "success", message: `已更新食材：${ingredient.name}` };
+    }
+  }
+  
+  // 新增
+  sheet.appendRow([ingredient.name, ingredient.hydration]);
+  return { status: "success", message: `已新增食材：${ingredient.name}` };
+}
+
+
+// 標準化百分比值
+function normalizePercentValue(p) {
+  if (p === null || p === undefined || p === "") return "";
+  if (typeof p === 'string') {
+    const s = p.trim();
+    if (s.endsWith('%')) {
+      const n = parseFloat(s.replace('%','').trim());
+      return isNaN(n) ? "" : n / 100;
+    }
+    const n = parseFloat(s);
+    return isNaN(n) ? "" : (n > 1 ? n / 100 : n);
+  }
+  if (typeof p === 'number') {
+    return (p > 1) ? (p / 100) : p;
+  }
+  return "";
+}
+
+// --- 刪除食材資料庫中的食材 ---
+function deleteIngredientDB(name) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("食材資料庫");
+  const data = sheet.getDataRange().getValues();
+  
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === name) {
+      sheet.deleteRow(i + 1);
+      return { status: "success", message: `已刪除食材：${name}` };
+    }
+  }
+  
+  return { status: "error", message: `找不到食材：${name}` };
+}
+
+// --- 新增食譜 ---
+function saveRecipe(title, ingredients, steps, bakingInfo) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("食譜");
+  const timestamp = new Date();
+  
+  // 確保所有食材數據都正確寫入
+  ingredients.forEach(ing => {
+    const percentNorm = normalizePercentValue(ing.percent);
+    const storePercent = (percentNorm === "") ? "" : percentNorm;
+    
+    // 明確指定每個欄位的值
+    const rowData = [
+      title || "",          // A列: 食譜名稱
+      ing.group || "",      // B列: 分組
+      ing.name || "",       // C列: 食材
+      ing.weight || 0,      // D列: 重量 (g)
+      storePercent,         // E列: 百分比
+      ing.desc || "",       // F列: 說明
+      steps || "",          // G列: 步驟
+      timestamp,            // H列: 建立時間
+      bakingInfo.topHeat,   // I列: 上火溫度
+      bakingInfo.bottomHeat,// J列: 下火溫度
+      bakingInfo.time,      // K列: 烘烤時間
+      bakingInfo.convection ? '是' : '否', // L列: 旋風
+      bakingInfo.steam ? '是' : '否'        // M列: 蒸汽
+    ];
+    
+    sheet.appendRow(rowData);
+  });
+  return true; // 前端可以判斷是否成功
+}
+
+// --- 取得所有食譜 ---
+function getRecipes() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("食譜");
+  if (!sheet) return [];
+  
+  const data = sheet.getDataRange().getValues();
+  const recipes = {};
+  
+  if (data.length <= 1) return [];
+  
+  // 跳過表頭行
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const title = row[0]; // A列: 食譜名稱
+    if (!title) continue;
+    
+    if (!recipes[title]) {
+      recipes[title] = {
+        title: title,
+        ingredients: [],
+        steps: row[6] || "", // G列: 步驟
+        timestamp: row[7] ? row[7].toISOString() : "",
+        baking: {
+          topHeat: row[8] || 200,
+          bottomHeat: row[9] || 200,
+          time: row[10] || 30,
+          convection: row[11] === '是',
+          steam: row[12] === '是'
+        }
+      };
+    }
+
+    // 處理百分比顯示
+    let percentDisplay = "";
+    const percentValue = row[4]; // E列: 百分比
+    
+    if (percentValue !== "" && !isNaN(percentValue)) {
+      percentDisplay = (Number(percentValue) * 100).toFixed(2) + "%";
+    } else {
+      const raw = String(percentValue || "").trim();
+      if (raw.endsWith("%")) {
+        const n = parseFloat(raw.replace('%',''));
+        if (!isNaN(n)) percentDisplay = n.toFixed(2) + "%";
+      }
+    }
+
+    recipes[title].ingredients.push({
+      group: row[1] || "", // B列: 分組
+      name: row[2] || "",  // C列: 食材
+      weight: row[3] || 0, // D列: 重量 (g)
+      percent: percentDisplay,
+      desc: row[5] || ""   // F列: 說明
+    });
+  }
+  
+  return Object.values(recipes);
+}
+
+// --- 刪除食譜 ---
+function deleteRecipe(title) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("食譜");
+  const data = sheet.getDataRange().getValues();
+  
+  let deletedCount = 0;
+  for (let i = data.length - 1; i > 0; i--) {
+    if (data[i][0] === title) {
+      sheet.deleteRow(i + 1);
+      deletedCount++;
+    }
+  }
+  
+  return { 
+    status: "success", 
+    message: `已刪除食譜：${title} (${deletedCount} 行數據)`
+  };
+}
+
+// --- 修改食譜 ---
+function updateRecipe(oldTitle, newTitle, ingredients, steps, bakingInfo) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("食譜");
+  const data = sheet.getDataRange().getValues();
+
+  // 刪除舊的食譜數據
+  let deletedCount = 0;
+  for (let i = data.length - 1; i > 0; i--) {
+    if (data[i][0] === oldTitle) {
+      sheet.deleteRow(i + 1);
+      deletedCount++;
+    }
+  }
+
+  // 保存新的食譜數據
+  const timestamp = new Date();
+  ingredients.forEach(ing => {
+    const percentNorm = normalizePercentValue(ing.percent);
+    const storePercent = (percentNorm === "") ? "" : percentNorm;
+    
+    const rowData = [
+      newTitle || "",       // A列: 食譜名稱
+      ing.group || "",      // B列: 分組
+      ing.name || "",       // C列: 食材
+      ing.weight || 0,      // D列: 重量 (g)
+      storePercent,         // E列: 百分比
+      ing.desc || "",       // F列: 說明
+      steps || "",          // G列: 步驟
+      timestamp,            // H列: 建立時間
+      bakingInfo.topHeat,   // I列: 上火溫度
+      bakingInfo.bottomHeat,// J列: 下火溫度
+      bakingInfo.time,      // K列: 烘烤時間
+      bakingInfo.convection ? '是' : '否', // L列: 旋風
+      bakingInfo.steam ? '是' : '否'        // M列: 蒸汽
+    ];
+    
+    sheet.appendRow(rowData);
+  });
+  
+  return { 
+    status: "success", 
+    message: `已更新食譜：${oldTitle} → ${newTitle} (刪除 ${deletedCount} 行，新增 ${ingredients.length} 行)`
+  };
+}
+
+// 診斷函數：檢查當前數據結構
+function diagnoseDataStructure() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("食譜");
+  const data = sheet.getDataRange().getValues();
+  
+  if (data.length === 0) {
+    return "工作表是空的";
+  }
+  
+  const headers = data[0];
+  const expectedHeaders = ["食譜名稱", "分組", "食材", "重量 (g)", "百分比", "說明", "步驟", "建立時間", "上火溫度", "下火溫度", "烘烤時間", "旋風", "蒸汽"];
+  let result = "當前表頭: " + JSON.stringify(headers) + "\n";
+  result += "預期表頭: " + JSON.stringify(expectedHeaders) + "\n\n";
+  
+  const sampleRows = Math.min(5, data.length - 1);
+  result += `前 ${sampleRows} 行數據示例:\n`;
+  for (let i = 1; i <= sampleRows; i++) {
+    if (i < data.length) {
+      result += `行 ${i+1}: ${JSON.stringify(data[i])}\n`;
+    }
+  }
+  
+  return result;
+}
+
+// 修復數據結構函數
+function fixDataStructure() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("食譜");
+  const data = sheet.getDataRange().getValues();
+  
+  if (data.length === 0) {
+    initSheet();
+    return "已初始化空的工作表";
+  }
+  
+  const expectedHeaders = ["食譜名稱", "分組", "食材", "重量 (g)", "百分比", "說明", "步驟", "建立時間", "上火溫度", "下火溫度", "烘烤時間", "旋風", "蒸汽"];
+  const currentHeaders = data[0];
+  
+  if (JSON.stringify(currentHeaders) !== JSON.stringify(expectedHeaders)) {
+    sheet.getRange(1, 1, 1, expectedHeaders.length).setValues([expectedHeaders]);
+    return "已修復表頭結構";
+  }
+  
+  let fixedRows = 0;
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (row.length < expectedHeaders.length) {
+      fixedRows++;
+    }
+  }
+  
+  if (fixedRows > 0) {
+    return `發現 ${fixedRows} 行數據結構問題，建議刪除這些行並重新添加數據`;
+  }
+  
+  return "數據結構正常，無需修復";
+}
+
+// 清除所有數據（謹慎使用）
+function clearAllData() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("食譜");
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+    return "已清除所有數據，但保留表頭";
+  }
+  return "沒有數據可清除";
+}
+
+// --- 新增：智能食材換算工具 ---
+function calculateRecipeConversion(recipeTitle, newTotalFlour, includeNonPercentageGroups) {
+  const recipes = getRecipes();
+  const recipe = recipes.find(r => r.title === recipeTitle);
+  
+  if (!recipe) {
+    return { status: "error", message: "找不到指定的食譜" };
+  }
+  
+  // 計算原始總麵粉量
+  let originalTotalFlour = 0;
+  recipe.ingredients.forEach(ing => {
+    if (isFlourIngredient(ing.name) && isPercentageGroup(ing.group)) {
+      originalTotalFlour += parseFloat(ing.weight) || 0;
+    }
+  });
+  
+  if (originalTotalFlour <= 0) {
+    return { status: "error", message: "此食譜沒有麵粉食材或麵粉重量為0" };
+  }
+  
+  // 計算換算比例
+  const conversionRatio = newTotalFlour / originalTotalFlour;
+  
+  // 換算所有食材重量
+  const convertedIngredients = recipe.ingredients.map(ing => {
+    const convertedIng = {...ing};
+    
+    // 只有在百分比分組中的食材才進行換算，或者如果用戶選擇包含非百分比分組
+    if (isPercentageGroup(ing.group) || includeNonPercentageGroups) {
+      const originalWeight = parseFloat(ing.weight) || 0;
+      convertedIng.weight = Math.round(originalWeight * conversionRatio * 10) / 10; // 四捨五入到小數點後一位
+    }
+    
+    return convertedIng;
+  });
+  
+  return {
+    status: "success",
+    originalTotalFlour: originalTotalFlour,
+    newTotalFlour: newTotalFlour,
+    conversionRatio: conversionRatio,
+    ingredients: convertedIngredients,
+    recipe: recipe
+  };
+}
+
+// 輔助函數：判斷是否為麵粉食材
+function isFlourIngredient(ingredientName) {
+  const flourKeywords = ["高筋麵粉", "中筋麵粉", "低筋麵粉", "全麥麵粉", "裸麥粉", "麵粉"];
+  return flourKeywords.some(keyword => ingredientName.includes(keyword));
+}
+
+// 輔助函數：判斷是否為百分比分組
+function isPercentageGroup(groupName) {
+  const percentageGroups = ["主麵團", "麵團餡料A", "麵團餡料B", "波蘭種", "液種", "中種", "魯班種"];
+  return percentageGroups.includes(groupName);
+}
