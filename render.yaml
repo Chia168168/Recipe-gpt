@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: recipe-gpt
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+
+  - type: worker
+    name: sheets-import
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python import_from_sheets.py
